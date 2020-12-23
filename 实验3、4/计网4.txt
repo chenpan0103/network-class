@@ -1,0 +1,111 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <stdarg.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <errno.h>
+#include <sys/time.h>
+
+#define UNIXEPOCH 2208988800UL
+
+extern int errno;
+unsigned short portbase = 0;
+
+int errexit(const char *format,...);
+int passivesock(const char *service, const char *transport, int qlen);
+int passiveUDP(const char *service);
+
+int main(int argc, char *argv[]){
+    char *service= "time";
+    struct sockaddr_in fsin;
+    char buf[1];
+    int sock;
+    time_t now;
+    unsigned int alen;
+
+    switch(argc){
+case 1:
+    break;
+case 2:
+    service=argv[1];
+    break;
+default:
+    errexit("usage: UDPtimed [port]\n");
+    }
+
+    sock=passiveUDP(service);
+
+    while(1){
+        alen=sizeof(fsin);
+        if(recvfrom(sock,buf,sizeof(buf),0,(struct sockaddr *)&fsin,&alen)<0)
+            errexit("recvfrom: %s\n",strerror(errno));
+        (void)time(&now);
+        now=htonl((unsigned long)(now+UNIXEPOCH));
+        (void)sendto(sock,(char*)&now,sizeof(now),0,(struct sockaddr *)&fsin,sizeof(fsin));
+    }
+}
+
+int errexit(const char *format,...){
+    va_list arg;
+    va_start(arg, format);
+    vfprintf(stderr,format,arg);
+    va_end(arg);
+    exit(1);
+}
+int passivesock(const char *service, const char *transport, int qlen)
+/*
+ * Arguments:
+ *      service   - service associated with the desired port
+ *      transport - transport protocol to use ("tcp" or "udp")
+ *      qlen      - maximum server request queue length
+ */
+{
+
+    struct servent*pse;/* pointer to service information entry*/
+    struct protoent *ppe;/* pointer to protocol information entry*/
+    struct sockaddr_in sin;/* an Internet endpoint address*/
+    int s, type;/* socket descriptor and socket type*/
+
+    memset(&sin, 0, sizeof(sin));
+    sin.sin_family = AF_INET;
+    sin.sin_addr.s_addr = INADDR_ANY;
+
+        /* Map service name to port number */
+    if ( pse = getservbyname(service, transport) )
+    sin.sin_port = htons(ntohs((unsigned short)pse->s_port)+ portbase);
+    else
+              if ((sin.sin_port=htons((unsigned short)atoi(service)+portbase)) == 0)
+    errexit("can't create passive service %d \n",sin.sin_port);
+
+        /* Map protocol name to protocol number */
+    if ( (ppe = getprotobyname(transport)) == 0)
+    errexit("can't get \"%s\" protocol entry\n", transport);
+
+        /* Use protocol to choose a socket type */
+    if (strcmp(transport, "udp") == 0)
+    type = SOCK_DGRAM;
+    else
+    type = SOCK_STREAM;
+
+        /* Allocate a socket */
+    s = socket(PF_INET, type, ppe->p_proto);
+    if (s < 0)
+    errexit("can't create socket: %s\n", strerror(errno));
+
+        /* Bind the socket */
+    if (bind(s, (struct sockaddr *)&sin, sizeof(sin)) < 0)
+    errexit("can't bind to %s port: %s\n", service,
+    strerror(errno));
+    if (type == SOCK_STREAM && listen(s, qlen) < 0)
+    errexit("can't listen on %s port: %s\n", service,
+    strerror(errno));
+    return s;
+}
+int passiveUDP(const char *service){
+    return passivesock(service,"udp",0);
+}
